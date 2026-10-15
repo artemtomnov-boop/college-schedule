@@ -1,6 +1,6 @@
 import axios from 'axios';
-import { parseScheduleFile } from './parser';
-import { getSupabaseAdmin } from './supabase';
+import { parseScheduleFile } from './parser.ts';
+import { getSupabaseAdmin } from './supabase.ts';
 import type { ParsedLesson, ParsedSchedule } from '../types/index.ts';
 
 export const SCHEDULE_SOURCES = [
