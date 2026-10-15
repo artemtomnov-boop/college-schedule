@@ -4,35 +4,51 @@ import { getSupabaseAdmin } from './supabase.js';
 import type { ParsedLesson, ParsedSchedule } from '../types/index.js';
 
 const SCHEDULE_PAGE_URL = 'https://phystech.pro/студенту/расписание/';
+const HTTP_TIMEOUT = 55_000;
 
-/**
- * Скачиваем страницу расписания и находим ссылки на XLSX-файлы.
- * Корпус определяем по «№1» / «№2» в URL.
- * Имена файлов содержат дату и меняются каждую неделю — поэтому
- * динамическое обнаружение критично.
- */
+async function fetchWithRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[fetch] попытка ${i + 1}/${attempts} провалилась: ${msg}`);
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 async function discoverScheduleUrls(): Promise<
   Array<{ buildingId: number; buildingName: string; url: string }>
 > {
-  const res = await axios.get<string>(SCHEDULE_PAGE_URL, {
-    timeout: 30_000,
-    headers: { 'User-Agent': 'Mozilla/5.0 schedule-app' },
-    responseType: 'text',
-  });
-  const html = res.data as string;
-
-  const hrefs = [...html.matchAll(/href=["']([^"']+\.xlsx)["']/gi)].map(
-    (m) => m[1]
+  console.log(`[update] Загружаем страницу: ${SCHEDULE_PAGE_URL}`);
+  const res = await fetchWithRetry(() =>
+    axios.get<string>(SCHEDULE_PAGE_URL, {
+      timeout: HTTP_TIMEOUT,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+      responseType: 'text',
+      maxRedirects: 5,
+    })
   );
+  console.log(`[update] Страница получена, длина: ${String(res.data).length} символов`);
+
+  const html = res.data as string;
+  const hrefs = [...html.matchAll(/href=["']([^"']+\.xlsx)["']/gi)].map((m) => m[1]);
   const unique = [...new Set(hrefs)];
+  console.log(`[update] Найдено XLSX-ссылок: ${unique.length}`);
 
   const result: Array<{ buildingId: number; buildingName: string; url: string }> = [];
   const usedBuildings = new Set<number>();
 
   for (const raw of unique) {
-    const url = raw.startsWith('http')
-      ? raw
-      : new URL(raw, SCHEDULE_PAGE_URL).toString();
+    const url = raw.startsWith('http') ? raw : new URL(raw, SCHEDULE_PAGE_URL).toString();
     if (!/\/uploads\/\d{4}\/\d{2}\//.test(url)) continue;
 
     const decoded = decodeURIComponent(url);
@@ -53,11 +69,22 @@ async function discoverScheduleUrls(): Promise<
 }
 
 async function downloadXlsx(url: string): Promise<Buffer> {
-  const res = await axios.get<ArrayBuffer>(url, {
-    responseType: 'arraybuffer',
-    timeout: 30_000,
-    headers: { 'User-Agent': 'Mozilla/5.0 schedule-app' },
-  });
+  const safeUrl = encodeURI(decodeURI(url));
+  console.log(`[update] Скачиваем: ${safeUrl}`);
+  const res = await fetchWithRetry(() =>
+    axios.get<ArrayBuffer>(safeUrl, {
+      responseType: 'arraybuffer',
+      timeout: HTTP_TIMEOUT,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+        Accept:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*',
+      },
+      maxRedirects: 5,
+    })
+  );
+  console.log(`[update] Получено ${res.data.byteLength} байт`);
   return Buffer.from(res.data);
 }
 
@@ -75,12 +102,10 @@ export async function fetchAndParseAll(): Promise<ParsedSchedule[]> {
 
   const result: ParsedSchedule[] = [];
   for (const source of sources) {
-    console.log(`[update] Скачиваем ${source.buildingName}: ${source.url}`);
+    console.log(`[update] Обрабатываем ${source.buildingName}`);
     const buf = await downloadXlsx(source.url);
     const lessons = parseScheduleFile(buf);
-    console.log(
-      `[update] ${source.buildingName}: распарсено ${lessons.length} занятий`
-    );
+    console.log(`[update] ${source.buildingName}: распарсено ${lessons.length} занятий`);
     result.push({
       buildingId: source.buildingId,
       buildingName: source.buildingName,
