@@ -1,0 +1,22 @@
+{
+  "name": "schedule-app",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:web": "pnpm --filter web dev",
+    "dev:api": "pnpm --filter api dev",
+    "build:web": "pnpm --filter web build"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
+    "@vercel/node": "^24.0.1",
+    "@vitejs/plugin-react": "^6.1.2",
+    "axios": "^1.20.0",
+    "supabase": "^2.121.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5"
+  }
+}
