@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import type { DayOfWeek, ParsedLesson } from '../types/index.ts';
+import type { DayOfWeek, ParsedLesson } from '../types/index.js';
 
 const DAY_MAP: Record<string, DayOfWeek> = {
   'пн': 1,
