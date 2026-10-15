@@ -3,18 +3,54 @@ import { parseScheduleFile } from './parser.js';
 import { getSupabaseAdmin } from './supabase.js';
 import type { ParsedLesson, ParsedSchedule } from '../types/index.js';
 
-export const SCHEDULE_SOURCES = [
-  {
-    buildingId: 1,
-    buildingName: 'Корпус 1',
-    url: 'https://phystech.pro/wp-content/uploads/2026/10/%D1%81-13.10-%D0%A1%D1%82%D1%80%D1%83%D0%BA%D1%82%D1%83%D1%80%D0%BD%D0%BE%D0%B5-%D0%BF%D0%BE%D0%B4%D1%80%D0%B0%D0%B7%D0%B4%D0%B5%D0%BB%D0%B5%D0%BD%D0%B8%D0%B5-%E2%84%961-1.xlsx',
-  },
-  {
-    buildingId: 2,
-    buildingName: 'Корпус 2',
-    url: 'https://phystech.pro/wp-content/uploads/2026/10/12.10.26-%D0%A1%D1%82%D1%80%D1%83%D0%BA%D1%82%D1%83%D1%80%D0%BD%D0%BE%D0%B5-%D0%BF%D0%BE%D0%B4%D1%80%D0%B0%D0%B7%D0%B4%D0%B5%D0%BB%D0%B5%D0%BD%D0%B8%D0%B5-%E2%84%962.-1.xlsx',
-  },
-];
+const SCHEDULE_PAGE_URL = 'https://phystech.pro/студенту/расписание/';
+
+/**
+ * Скачиваем страницу расписания и находим ссылки на XLSX-файлы.
+ * Корпус определяем по «№1» / «№2» в URL.
+ * Имена файлов содержат дату и меняются каждую неделю — поэтому
+ * динамическое обнаружение критично.
+ */
+async function discoverScheduleUrls(): Promise<
+  Array<{ buildingId: number; buildingName: string; url: string }>
+> {
+  const res = await axios.get<string>(SCHEDULE_PAGE_URL, {
+    timeout: 30_000,
+    headers: { 'User-Agent': 'Mozilla/5.0 schedule-app' },
+    responseType: 'text',
+  });
+  const html = res.data as string;
+
+  const hrefs = [...html.matchAll(/href=["']([^"']+\.xlsx)["']/gi)].map(
+    (m) => m[1]
+  );
+  const unique = [...new Set(hrefs)];
+
+  const result: Array<{ buildingId: number; buildingName: string; url: string }> = [];
+  const usedBuildings = new Set<number>();
+
+  for (const raw of unique) {
+    const url = raw.startsWith('http')
+      ? raw
+      : new URL(raw, SCHEDULE_PAGE_URL).toString();
+    if (!/\/uploads\/\d{4}\/\d{2}\//.test(url)) continue;
+
+    const decoded = decodeURIComponent(url);
+    let buildingId: number | null = null;
+    if (/№\s*1\b/.test(decoded)) buildingId = 1;
+    else if (/№\s*2\b/.test(decoded)) buildingId = 2;
+
+    if (!buildingId || usedBuildings.has(buildingId)) continue;
+    usedBuildings.add(buildingId);
+    result.push({
+      buildingId,
+      buildingName: buildingId === 1 ? 'Корпус 1' : 'Корпус 2',
+      url,
+    });
+  }
+
+  return result;
+}
 
 async function downloadXlsx(url: string): Promise<Buffer> {
   const res = await axios.get<ArrayBuffer>(url, {
@@ -26,12 +62,25 @@ async function downloadXlsx(url: string): Promise<Buffer> {
 }
 
 export async function fetchAndParseAll(): Promise<ParsedSchedule[]> {
+  const sources = await discoverScheduleUrls();
+
+  if (sources.length === 0) {
+    throw new Error('Не удалось найти ссылки на XLSX на странице расписания');
+  }
+  if (sources.length < 2) {
+    console.warn(
+      `[update] Найдено только ${sources.length} файлов — возможно, второй корпус недоступен`
+    );
+  }
+
   const result: ParsedSchedule[] = [];
-  for (const source of SCHEDULE_SOURCES) {
+  for (const source of sources) {
     console.log(`[update] Скачиваем ${source.buildingName}: ${source.url}`);
     const buf = await downloadXlsx(source.url);
     const lessons = parseScheduleFile(buf);
-    console.log(`[update] ${source.buildingName}: распарсено ${lessons.length} занятий`);
+    console.log(
+      `[update] ${source.buildingName}: распарсено ${lessons.length} занятий`
+    );
     result.push({
       buildingId: source.buildingId,
       buildingName: source.buildingName,
@@ -41,17 +90,9 @@ export async function fetchAndParseAll(): Promise<ParsedSchedule[]> {
   return result;
 }
 
-/**
- * Полная перезагрузка расписания в Supabase.
- * Порядок:
- *   1. upsert корпусов
- *   2.  все lessons (пересобираемудалить с нуля)
- *   3. upsert групп, преподавателей, предметов -> получить id
- *   4. вставить lessons с резолвом id
- */
 export async function saveSchedulesToDb(schedules: ParsedSchedule[]): Promise<void> {
   const supabaseAdmin = getSupabaseAdmin();
-    // 1. Корпуса
+
   for (const s of schedules) {
     const { error } = await supabaseAdmin
       .from('buildings')
@@ -59,13 +100,11 @@ export async function saveSchedulesToDb(schedules: ParsedSchedule[]): Promise<vo
     if (error) throw new Error(`buildings upsert: ${error.message}`);
   }
 
-  // 2. Удаляем все lessons (перезапись)
   {
     const { error } = await supabaseAdmin.from('lessons').delete().neq('id', 0);
     if (error) throw new Error(`lessons delete: ${error.message}`);
   }
 
-  // Собираем уникальные сущности
   const allLessons: Array<ParsedLesson & { buildingId: number }> = [];
   for (const s of schedules) {
     for (const l of s.lessons) allLessons.push({ ...l, buildingId: s.buildingId });
@@ -81,35 +120,28 @@ export async function saveSchedulesToDb(schedules: ParsedSchedule[]): Promise<vo
     subjectKeys.set(l.subjectName, { name: l.subjectName });
   }
 
-  // 3a. Группы
-  const groupRows = [...groupKeys.values()];
   const { data: groupsData, error: groupsErr } = await supabaseAdmin
     .from('groups')
-    .upsert(groupRows, { onConflict: 'name' })
+    .upsert([...groupKeys.values()], { onConflict: 'name' })
     .select('id, name');
   if (groupsErr) throw new Error(`groups upsert: ${groupsErr.message}`);
 
-  // 3b. Преподаватели
-  const teacherRows = [...teacherKeys.values()];
   let teachersData: { id: number; full_name: string }[] = [];
-  if (teacherRows.length > 0) {
+  if (teacherKeys.size > 0) {
     const { data, error } = await supabaseAdmin
       .from('teachers')
-      .upsert(teacherRows, { onConflict: 'full_name' })
+      .upsert([...teacherKeys.values()], { onConflict: 'full_name' })
       .select('id, full_name');
     if (error) throw new Error(`teachers upsert: ${error.message}`);
     teachersData = data ?? [];
   }
 
-  // 3c. Предметы
-  const subjectRows = [...subjectKeys.values()];
   const { data: subjectsData, error: subjectsErr } = await supabaseAdmin
     .from('subjects')
-    .upsert(subjectRows, { onConflict: 'name' })
+    .upsert([...subjectKeys.values()], { onConflict: 'name' })
     .select('id, name');
   if (subjectsErr) throw new Error(`subjects upsert: ${subjectsErr.message}`);
 
-  // Индексы name -> id
   const groupIdByName = new Map<string, number>();
   for (const g of groupsData ?? []) groupIdByName.set(g.name, g.id);
 
@@ -119,7 +151,6 @@ export async function saveSchedulesToDb(schedules: ParsedSchedule[]): Promise<vo
   const subjectIdByName = new Map<string, number>();
   for (const s of subjectsData ?? []) subjectIdByName.set(s.name, s.id);
 
-  // 4. Lessons
   const lessonRows = allLessons.map((l) => ({
     group_id: groupIdByName.get(l.groupName)!,
     teacher_id: l.teacherName ? teacherIdByName.get(l.teacherName) ?? null : null,
