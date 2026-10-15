@@ -71,21 +71,20 @@ async function discoverScheduleUrls(): Promise<
 async function downloadXlsx(url: string): Promise<Buffer> {
   const safeUrl = encodeURI(decodeURI(url));
   console.log(`[update] Скачиваем: ${safeUrl}`);
-  const res = await fetchWithRetry(() =>
-    axios.get<ArrayBuffer>(safeUrl, {
-      responseType: 'arraybuffer',
-      timeout: HTTP_TIMEOUT,
+  return fetchWithRetry(async () => {
+    const signal = AbortSignal.timeout(HTTP_TIMEOUT);
+    const res = await fetch(safeUrl, {
       headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-        Accept:
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+        Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*',
       },
-      maxRedirects: 5,
-    })
-  );
-  console.log(`[update] Получено ${res.data.byteLength} байт`);
-  return Buffer.from(res.data);
+      signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    console.log(`[update] Получено ${buf.byteLength} байт`);
+    return buf;
+  });
 }
 
 export async function fetchAndParseAll(): Promise<ParsedSchedule[]> {
