@@ -1,4 +1,4 @@
-import { fetchAndParseAll } from '../lib/update.ts';
+import { fetchAndParseAll } from '../lib/update.js';
 
 (async () => {
   const schedules = await fetchAndParseAll();

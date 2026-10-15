@@ -1,4 +1,4 @@
-import { runFullUpdate } from '../lib/update.ts';
+import { runFullUpdate } from '../lib/update.js';
 
 (async () => {
   await runFullUpdate();

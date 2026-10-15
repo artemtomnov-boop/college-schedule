@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { runFullUpdate } from '../../lib/update.ts';
+import { runFullUpdate } from '../../lib/update.js';
 
 export const config = {
   maxDuration: 60,
