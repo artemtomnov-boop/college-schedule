@@ -15,8 +15,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    await runFullUpdate();
-    return res.status(200).json({ ok: true, at: new Date().toISOString() });
+    const result = await runFullUpdate();
+    return res.status(200).json({
+      ok: true,
+      changed: result.changed,
+      lessons: result.lessons,
+      at: new Date().toISOString(),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[cron/update]', message);

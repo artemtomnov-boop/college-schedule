@@ -3,11 +3,17 @@ import type { DayOfWeek, ParsedLesson } from '../types/index.js';
 
 const DAY_MAP: Record<string, DayOfWeek> = {
   'пн': 1,
+  'понедельник': 1,
   'вт': 2,
+  'вторник': 2,
   'ср': 3,
+  'среда': 3,
   'чт': 4,
+  'четверг': 4,
   'пт': 5,
+  'пятница': 5,
   'сб': 6,
+  'суббота': 6,
 };
 
 /**

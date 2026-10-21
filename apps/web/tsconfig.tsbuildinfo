@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/scheduletable.tsx","./src/components/searchableselect.tsx","./src/components/studenttab.tsx","./src/components/teachertab.tsx","./src/hooks/usedata.ts","./src/lib/supabase.ts","./src/types/index.ts"],"version":"5.9.3"}

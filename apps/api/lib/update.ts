@@ -2,6 +2,7 @@ import axios from 'axios';
 import { parseScheduleFile } from './parser.js';
 import { getSupabaseAdmin } from './supabase.js';
 import type { ParsedLesson, ParsedSchedule } from '../types/index.js';
+import { createHash } from 'node:crypto';
 
 const SCHEDULE_PAGE_URL = 'https://phystech.pro/студенту/расписание/';
 const HTTP_TIMEOUT = 55_000;
@@ -196,7 +197,82 @@ export async function saveSchedulesToDb(schedules: ParsedSchedule[]): Promise<vo
   console.log(`[update] Записано занятий: ${lessonRows.length}`);
 }
 
-export async function runFullUpdate(): Promise<void> {
+/**
+ * Вычисляет SHA-256 от байтов всех XLSX-файлов.
+ * Если совпадает с сохранённым — расписание не изменилось.
+ */
+async function computeSchedulesHash(schedules: ParsedSchedule[]): Promise<string> {
+  const hash = createHash('sha256');
+  // Сортируем по buildingId, чтобы порядок был детерминированным
+  const sorted = [...schedules].sort((a, b) => a.buildingId - b.buildingId);
+  for (const s of sorted) {
+    hash.update(`building:${s.buildingId}\n`);
+    // Стабильная сериализация: сортируем занятия
+    const lessons = [...s.lessons].sort((a, b) => {
+      if (a.dayOfWeek !== b.dayOfWeek) return a.dayOfWeek - b.dayOfWeek;
+      if (a.pairNumber !== b.pairNumber) return a.pairNumber - b.pairNumber;
+      return a.groupName.localeCompare(b.groupName);
+    });
+    for (const l of lessons) {
+      hash.update(
+        [
+          l.groupName,
+          l.dayOfWeek,
+          l.pairNumber,
+          l.timeStart,
+          l.timeEnd,
+          l.subjectName,
+          l.teacherName ?? '',
+          l.room ?? '',
+          l.isEvent ? '1' : '0',
+        ].join('|')
+      );
+      hash.update('\n');
+    }
+  }
+  return hash.digest('hex');
+}
+
+async function getStoredHash(): Promise<string | null> {
+  const admin = getSupabaseAdmin();
+  const { data, error } = await admin
+    .from('schedule_meta')
+    .select('content_hash')
+    .eq('id', 1)
+    .maybeSingle();
+  if (error) {
+    console.warn(`[update] schedule_meta read: ${error.message}`);
+    return null;
+  }
+  return data?.content_hash ?? null;
+}
+
+async function saveStoredHash(hash: string): Promise<void> {
+  const admin = getSupabaseAdmin();
+  const { error } = await admin
+    .from('schedule_meta')
+    .upsert({ id: 1, content_hash: hash, updated_at: new Date().toISOString() });
+  if (error) throw new Error(`schedule_meta upsert: ${error.message}`);
+}
+
+export async function runFullUpdate(): Promise<{
+  changed: boolean;
+  lessons: number;
+}> {
   const schedules = await fetchAndParseAll();
+  const newHash = await computeSchedulesHash(schedules);
+  const oldHash = await getStoredHash();
+
+  if (oldHash === newHash) {
+    const total = schedules.reduce((acc, s) => acc + s.lessons.length, 0);
+    console.log(`[update] Хэш не изменился (${newHash.slice(0, 8)}…), пропускаем запись в БД.`);
+    return { changed: false, lessons: total };
+  }
+
+  console.log(`[update] Расписание изменилось (${oldHash?.slice(0, 8) ?? '—'} → ${newHash.slice(0, 8)}), обновляем БД…`);
   await saveSchedulesToDb(schedules);
+  await saveStoredHash(newHash);
+
+  const total = schedules.reduce((acc, s) => acc + s.lessons.length, 0);
+  return { changed: true, lessons: total };
 }
