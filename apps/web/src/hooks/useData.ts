@@ -106,3 +106,35 @@ export function useScheduleByTeacher(teacherId: number | null) {
 
   return { data, loading };
 }
+
+export interface ScheduleMeta {
+  updatedAt: string | null;
+  lastCheckedAt: string | null;
+}
+
+export function useScheduleMeta(): ScheduleMeta {
+  const [meta, setMeta] = useState<ScheduleMeta>({
+    updatedAt: null,
+    lastCheckedAt: null,
+  });
+
+  useEffect(() => {
+    supabase
+      .from('schedule_meta')
+      .select('updated_at, last_checked_at')
+      .eq('id', 1)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('schedule_meta:', error.message);
+          return;
+        }
+        setMeta({
+          updatedAt: data?.updated_at ?? null,
+          lastCheckedAt: data?.last_checked_at ?? null,
+        });
+      });
+  }, []);
+
+  return meta;
+}

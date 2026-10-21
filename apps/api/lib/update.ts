@@ -247,32 +247,43 @@ async function getStoredHash(): Promise<string | null> {
   return data?.content_hash ?? null;
 }
 
-async function saveStoredHash(hash: string): Promise<void> {
+async function touchLastChecked(): Promise<void> {
   const admin = getSupabaseAdmin();
   const { error } = await admin
     .from('schedule_meta')
-    .upsert({ id: 1, content_hash: hash, updated_at: new Date().toISOString() });
+    .update({ last_checked_at: new Date().toISOString() })
+    .eq('id', 1);
+  if (error) console.warn(`[update] last_checked_at: ${error.message}`);
+}
+
+async function saveStoredHash(hash: string): Promise<void> {
+  const admin = getSupabaseAdmin();
+  const now = new Date().toISOString();
+  const { error } = await admin.from('schedule_meta').upsert({
+    id: 1,
+    content_hash: hash,
+    updated_at: now,
+    last_checked_at: now,
+  });
   if (error) throw new Error(`schedule_meta upsert: ${error.message}`);
 }
 
-export async function runFullUpdate(): Promise<{
-  changed: boolean;
-  lessons: number;
-}> {
+export async function runFullUpdate(): Promise<{ changed: boolean; lessons: number }> {
   const schedules = await fetchAndParseAll();
   const newHash = await computeSchedulesHash(schedules);
   const oldHash = await getStoredHash();
+  const total = schedules.reduce((acc, s) => acc + s.lessons.length, 0);
 
   if (oldHash === newHash) {
-    const total = schedules.reduce((acc, s) => acc + s.lessons.length, 0);
     console.log(`[update] Хэш не изменился (${newHash.slice(0, 8)}…), пропускаем запись в БД.`);
+    await touchLastChecked();
     return { changed: false, lessons: total };
   }
 
-  console.log(`[update] Расписание изменилось (${oldHash?.slice(0, 8) ?? '—'} → ${newHash.slice(0, 8)}), обновляем БД…`);
+  console.log(
+    `[update] Расписание изменилось (${oldHash?.slice(0, 8) ?? '—'} → ${newHash.slice(0, 8)}), обновляем БД…`
+  );
   await saveSchedulesToDb(schedules);
   await saveStoredHash(newHash);
-
-  const total = schedules.reduce((acc, s) => acc + s.lessons.length, 0);
   return { changed: true, lessons: total };
 }
