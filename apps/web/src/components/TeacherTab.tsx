@@ -1,12 +1,20 @@
-import { useState } from 'react';
+import { useEffect } from 'react';
 import { useScheduleByTeacher, useTeachers } from '../hooks/useData';
 import { ScheduleTable } from './ScheduleTable';
 import { SearchableSelect } from './SearchableSelect';
+import { usePersistedId } from '../hooks/usePersistedId';
 
 export function TeacherTab() {
   const { data: teachers, loading, error } = useTeachers();
-  const [teacherId, setTeacherId] = useState<number | null>(null);
+  const [teacherId, setTeacherId] = usePersistedId('schedule.selectedTeacherId');
   const { data: lessons, loading: lessonsLoading } = useScheduleByTeacher(teacherId);
+
+  useEffect(() => {
+    if (loading || teacherId == null) return;
+    if (!teachers.some((t) => t.id === teacherId)) {
+      setTeacherId(null);
+    }
+  }, [loading, teachers, teacherId, setTeacherId]);
 
   if (loading) return <div className="loading">Загрузка преподавателей…</div>;
   if (error) return <div className="error">{error}</div>;
